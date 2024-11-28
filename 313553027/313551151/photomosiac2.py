@@ -273,8 +273,8 @@ def main():
     print(f"Mean loss per pixel: {mean_loss_per_pixel:.6f}")
 
     # Prepare output log
-    output_log_path = os.path.join(args.output_dir, 'output.log')
-    with open(output_log_path, 'a') as log_file:
+    result_log_path = os.path.join(args.output_dir, 'result.log')
+    with open(result_log_path, 'w') as log_file:
         log_file.write(f"Preprocessing time: {preprocessing_time:.2f} seconds\n")
         log_file.write(f"Querying time: {querying_time:.2f} seconds\n")
         log_file.write(f"Evaluating time: {evaluating_time:.2f} seconds\n")
