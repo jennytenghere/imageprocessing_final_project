@@ -102,6 +102,7 @@ def main():
     parser.add_argument('--n_row', type=int, required=True, help='Number of rows (Y)')
     parser.add_argument('--n_col', type=int, required=True, help='Number of columns (X)')
     parser.add_argument('--exhibit', action='store_true', help='If provided, show comparison images')
+    parser.add_argument('--B_limit', type=int, default=1000, help='Take the first n pictures out from B.pt,-1 means all')
 
     # Batch sizes
     parser.add_argument('--pre_batch', type=int, default=1000, help='Preprocessing stage batch size')
@@ -138,7 +139,7 @@ def main():
     # Load tensors
     A = torch.load(args.tgt_pt).float()
     B = torch.load(args.used_pt).float()
-    B = B[:1000]
+    if(args.B_limit != -1):B = B[:args.B_limit]
 
     # Handle device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -343,12 +344,17 @@ def main():
         axs[1].set_title('Constructed Image')
         axs[1].axis('off')
 
-        loss_image = loss_tensor_reshaped[i]
-        loss_image_norm = (loss_image - loss_image.min()) / (loss_image.max() - loss_image.min() + 1e-8)
-        loss_image_upscaled = np.kron(loss_image_norm, np.ones((h, w)))
-        axs[2].imshow(loss_image_upscaled, cmap='gray')
+        loss_image = loss_tensor_reshaped[i]/(h_evaluate* w_evaluate* C_B_evaluate)
+        # Upscale the loss image to match image size
+        loss_image_upscaled = np.kron(loss_image, np.ones((h, w)))
+        # Use a colorful colormap and store the image object
+        im = axs[2].imshow(loss_image_upscaled, cmap='viridis')
         axs[2].set_title('Loss Map')
         axs[2].axis('off')
+
+        # Add a colorbar to the loss map with original loss values
+        cbar = fig.colorbar(im, ax=axs[2], orientation='vertical', fraction=0.046, pad=0.04)
+        cbar.set_label('Loss Value')
 
         plot_filename = os.path.join(output_dir, f'comparison_{i}.png')
         plt.savefig(plot_filename, dpi=300)
