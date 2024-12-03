@@ -30,7 +30,8 @@ def process_superpixel(idx, target_image, labels, loaded_images, mask, x, y, w, 
         i_masked = np.zeros_like(i_resized)
         for c in range(3):
             i_masked[:, :, c] = mask_region * i_resized[:, :, c]
-        bgr_mean_list.append(np.mean(i_masked, axis=(1, 0)))
+        # bgr_mean_list.append(np.mean(i_masked, axis=(1, 0)))
+        bgr_mean_list.append(np.mean(i_masked[mask_region==1], axis=0))
 
     image_idx = 0
     for i, k in enumerate(bgr_mean_list):
