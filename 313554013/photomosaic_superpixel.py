@@ -85,7 +85,8 @@ def create_superpixel_list_new(target_image, loaded_images, image_folder, files,
             i_masked = np.zeros_like(i_resized)
             for c in range(3):
                 i_masked[:, :, c] = mask_region * (i_resized[:, :, c])
-            bgr_mean_list.append(np.mean(i_masked, axis=(1,0)))
+            # bgr_mean_list.append(np.mean(i_masked, axis=(1,0)))
+            bgr_mean_list.append(np.mean(i_masked[mask_region==1], axis=0))
         
         for i in range(len(bgr_mean_list)):
             k = bgr_mean_list[i]
