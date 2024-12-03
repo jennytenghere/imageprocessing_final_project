@@ -77,9 +77,7 @@ def create_superpixel_list_new(target_image, loaded_images, image_folder, files,
 
 def main(opt):
     target_image = cv2.imread(opt.target_root)
-    w = target_image.shape[1]
-    h = target_image.shape[0]
-    target_image = cv2.resize(target_image, (w//2,h//2), interpolation=cv2.INTER_LINEAR)
+
     try:
         loaded_data = np.load(opt.npz_dir)
     except:
