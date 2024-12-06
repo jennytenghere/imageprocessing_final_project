@@ -7,6 +7,7 @@ import numpy as np
 import cudf
 from cuml import KMeans
 import torch.nn.functional as F
+import torch.fft
 import pywt  # For wavelet transform
 import time
 
@@ -45,8 +46,20 @@ def apply_transform(tensor, transform):
             transformed_tensors.append(torch.from_numpy(LL))
         tensor_transformed = torch.stack(transformed_tensors, dim=3)
         return tensor_transformed.to(tensor.device)
+    elif transform.lower() == 'fourier':
+        # Apply Fourier transform
+        # Permute tensor to (N, C, H, W) for torch.fft.fft2
+        tensor = tensor.permute(0, 3, 1, 2)  # (N, C, H, W)
+        # Apply 2D Fourier transform along H and W dimensions
+        tensor_fft = torch.fft.fft2(tensor)
+        # Take the magnitude (absolute value) to get real numbers
+        tensor_abs = torch.abs(tensor_fft)
+        # Permute back to (N, H, W, C)
+        tensor_transformed = tensor_abs.permute(0, 2, 3, 1)
+        return tensor_transformed
     else:
         raise NotImplementedError(f"Transform '{transform}' is not implemented.")
+
 
 def compress_tensor(tensor, compress_ratio):
     if compress_ratio <= 1:
@@ -90,6 +103,7 @@ def main():
     parser.add_argument('--select_Cspace', type=str, default='rgb', help='Color space used in selection (default: rgb)')
     parser.add_argument('--select_transform', type=str, default=None, help='Transformation used in selection (options: None, wavelet)')
     parser.add_argument('--select_compress_ratio', type=int, default=1, help='Compression ratio for selection (default: 1)')
+    parser.add_argument('--output_name', type=str, required=True, help='output file name')
 
     args = parser.parse_args()
 
@@ -142,9 +156,10 @@ def main():
     B_selected = B[selected_indices]
 
     # Prepare output filename
-    args_dict = vars(args)
-    args_str = '_'.join([f"{k}={args_dict[k]}" for k in args_dict if k != 'used_pt'])
-    output_filename = f"KMeans_{args_str}.pt"
+    # args_dict = vars(args)
+    # args_str = '_'.join([f"{k}={args_dict[k]}" for k in args_dict if k != 'used_pt'])
+    # output_filename = f"KMeans_{args_str}.pt"
+    output_filename = args.output_name
     cluster_end_time = time.time()
     print("Takes", cluster_end_time - cluster_start_time)
     # Save the selected images

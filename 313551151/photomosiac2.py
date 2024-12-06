@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import os
 import torch.nn.functional as F
 import time
-
+import pywt
 
 def rgb_to_xyz(tensor):
     # Convert RGB to XYZ color space
@@ -45,11 +45,38 @@ def apply_transform(tensor, transform):
         return tensor
     elif transform.lower() == 'fourier':
         # Apply Fourier transform
+        # Permute tensor to (N, C, H, W) for torch.fft.fft2
         tensor = tensor.permute(0, 3, 1, 2)  # (N, C, H, W)
+        # Apply 2D Fourier transform along H and W dimensions
         tensor_fft = torch.fft.fft2(tensor)
-        tensor = torch.abs(tensor_fft)
-        tensor = tensor.permute(0, 2, 3, 1)  # (N, H, W, C)
-        return tensor
+        # Take the magnitude (absolute value) to get real numbers
+        tensor_abs = torch.abs(tensor_fft)
+        # Permute back to (N, H, W, C)
+        tensor_transformed = tensor_abs.permute(0, 2, 3, 1)  # (N, H, W, C)
+        return tensor_transformed
+    elif transform.lower() == 'wavelet':
+        # Apply Wavelet transform using Haar wavelet
+        N, H, W, C = tensor.shape
+        transformed_tensors = []
+        for c in range(C):
+            # Extract each channel and move to CPU for processing with pywt
+            channel = tensor[:, :, :, c].cpu().numpy()  # Shape: (N, H, W)
+            # Initialize list to hold transformed channels for this feature map
+            transformed_channels = []
+            for i in range(N):
+                # Perform 2D Discrete Wavelet Transform
+                coeffs2 = pywt.dwt2(channel[i], 'haar')
+                LL, (LH, HL, HH) = coeffs2
+                # Flatten the LL coefficients and store
+                transformed_channels.append(LL.flatten())
+            # Stack all transformed channels for this feature map
+            transformed_channel_tensor = torch.tensor(transformed_channels, device=tensor.device)
+            transformed_tensors.append(transformed_channel_tensor)
+        # Concatenate all channels
+        tensor_transformed = torch.stack(transformed_tensors, dim=1)  # Shape: (N, C, LL_H*LL_W)
+        # Optionally, reshape back to (N, H', W', C) if needed
+        # Here, we keep it as (N, C, LL_H*LL_W) since clustering requires 1D features
+        return tensor_transformed
     else:
         raise NotImplementedError(f"Transform '{transform}' is not implemented.")
 
@@ -273,6 +300,10 @@ def main():
     mean_loss_per_pixel = total_loss / total_pixels
     print(f"Mean loss per pixel: {mean_loss_per_pixel:.6f}")
 
+    output_dir = args.output_dir
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+
     # Prepare output log
     result_log_path = os.path.join(args.output_dir, 'result.log')
     with open(result_log_path, 'w') as log_file:
@@ -285,8 +316,7 @@ def main():
     best_match_indices_reshaped = best_match_indices.reshape(N_A_query, n_row, n_col)
     loss_tensor_reshaped = loss_tensor.reshape(N_A_query, n_row, n_col)
 
-    output_dir = args.output_dir
-    assert os.path.exists(output_dir)
+
 
     output_log_path = os.path.join(args.output_dir, 'output.log')
     with open(output_log_path, 'w') as log_file:
@@ -359,7 +389,7 @@ def main():
         plot_filename = os.path.join(output_dir, f'comparison_{i}.png')
         plt.savefig(plot_filename, dpi=300)
         print(f'Saved plot to {plot_filename}')
-        plt.show()
+        #plt.show()
 
     exhibit_end_time = time.time()
     print(f'Exhibit completed in {exhibit_end_time - exhibit_start_time:.2f} seconds.')
