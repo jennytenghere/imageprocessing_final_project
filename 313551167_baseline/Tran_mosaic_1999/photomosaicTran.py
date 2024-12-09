@@ -5,7 +5,6 @@ from PIL import Image, ImageOps
 from tqdm import tqdm
 
 # Configuration parameters
-TILE_SIZE = 50      # height/width of mosaic tiles in pixels
 ENLARGEMENT = 1     # the mosaic image will be this many times wider and taller than the original
 OUT_FILE = 'mosaic.jpeg'
 
@@ -27,7 +26,7 @@ class TileProcessor:
             img = img.crop((w_crop, h_crop, w - w_crop, h - h_crop))
 
             # Resize the image to the target tile size
-            tile_img = img.resize((TILE_SIZE, TILE_SIZE), Image.LANCZOS)
+            tile_img = img.resize((tile_size, tile_size), Image.LANCZOS)
             return tile_img.convert('RGB')
         except:
             return None
@@ -63,8 +62,8 @@ class TargetImage:
         large_img = img.resize((w, h), Image.LANCZOS)
         
         # Crop to ensure we have complete tiles
-        w_diff = (w % TILE_SIZE)/2
-        h_diff = (h % TILE_SIZE)/2
+        w_diff = (w % tile_size)/2
+        h_diff = (h % tile_size)/2
         if w_diff or h_diff:
             large_img = large_img.crop((w_diff, h_diff, w - w_diff, h - h_diff))
 
@@ -94,15 +93,19 @@ def create_mosaic(original_img, tiles):
     
     W = original_img.size[0]
     H = original_img.size[1]
-    total_blocks = (W // TILE_SIZE) * (H // TILE_SIZE)
+    total_blocks = (W // tile_size) * (H // tile_size)
+    
+    # Initialize total loss
+    total_loss = 0
+    total_pixels = 0
     
     # Setup progress bar for blocks processing
     with tqdm(total=total_blocks, desc="Creating mosaic") as pbar:
         # Iterate through each block in the original image O(WH)
-        for y in range(0, H - TILE_SIZE + 1, TILE_SIZE):
-            for x in range(0, W - TILE_SIZE + 1, TILE_SIZE):
+        for y in range(0, H - tile_size + 1, tile_size):
+            for x in range(0, W - tile_size + 1, tile_size):
                 # Get current block data
-                block = original_img.crop((x, y, x + TILE_SIZE, y + TILE_SIZE))
+                block = original_img.crop((x, y, x + tile_size, y + tile_size))
                 block_data = list(block.getdata())
                 
                 # Find best matching tile O(T)
@@ -119,10 +122,23 @@ def create_mosaic(original_img, tiles):
                 # Place the best matching tile
                 result.paste(tiles[best_tile_idx], (x, y))
                 pbar.update(1)
+                
+                # Update total loss
+                total_loss += best_distance
+                total_pixels += len(block_data)*3
     
+    # Save the result
     print('Saving mosaic...')
     result.save(OUT_FILE)
     print('Finished! Output is in', OUT_FILE)
+    
+    # Caclulate average loss
+    min_loss_per_pixel = total_loss / total_pixels
+    print(f'\nMetrics:')
+    print(f'- Total L1 Loss: {total_loss:,}')
+    print(f'- Total Pixels (RGB channels): {total_pixels:,}')
+    print(f'- Min Loss Per Pixel: {min_loss_per_pixel:.2f}')
+    
 
 def show_error(msg):
     print('ERROR: {}'.format(msg))
@@ -146,24 +162,25 @@ def create_photomosaic(img_path, tiles_path):
         end_time = time.time()
         execution_time = end_time - start_time
         
-        print(f'\nTotal execution time: {execution_time:.2f} seconds')
-        print(f'                     ({execution_time/60:.2f} minutes)')
+        print(f'\n - Total execution time: {execution_time:.2f} seconds')
+        print(f'                           ({execution_time/60:.2f} minutes)')
         
         # Display image information
         print(f'\nImage details:')
         print(f'- Original size: {image_data.size[0]}x{image_data.size[1]} pixels')
-        print(f'- Tile size: {TILE_SIZE}x{TILE_SIZE} pixels')
+        print(f'- Tile size: {tile_size}x{tile_size} pixels')
         print(f'- Number of tiles used: {len(tiles_data)}')
-        print(f'- Total tiles placed: {(image_data.size[0] // TILE_SIZE) * (image_data.size[1] // TILE_SIZE)}')
+        print(f'- Total tiles placed: {(image_data.size[0] // tile_size) * (image_data.size[1] // tile_size)}')
     else:
         show_error("No images found in tiles directory '{}'".format(tiles_path))
 
 if __name__ == '__main__':
-    if len(sys.argv) < 3:
-        show_error('Usage: {} <image> <tiles directory>\r'.format(sys.argv[0]))
+    if len(sys.argv) < 4:
+        show_error('Usage: {} <image> <tiles directory> <tile size>\r'.format(sys.argv[0]))
     else:
         source_image = sys.argv[1]
         tile_dir = sys.argv[2]
+        tile_size = int(sys.argv[3])
         
         if not os.path.isfile(source_image):
             show_error("Unable to find image file '{}'".format(source_image))
