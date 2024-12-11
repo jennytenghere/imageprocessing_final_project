@@ -16,18 +16,17 @@ def process_superpixel(idx, target_image, labels, mask, x, y, w, h, image_folder
 
         tile_h, tile_w = tile.shape[:2]
         scale_factor = max(h / tile_h, w / tile_w)
-        new_tile_w = int(tile_w * scale_factor)
-        new_tile_h = int(tile_h * scale_factor)
+        new_tile_w = max(w, int(tile_w * scale_factor))
+        new_tile_h = max(h, int(tile_h * scale_factor))
         
         mask_region = mask[y:y+h, x:x+w]
         mask_region[mask_region > 0] = 1
-        tile_resized = cv2.resize(tile, (new_tile_w, new_tile_h), interpolation=cv2.INTER_AREA)
+        tile_resized = cv2.resize(tile, (new_tile_w, new_tile_h), interpolation=cv2.INTER_AREA)    
 
-        top = new_tile_h // 2 - h // 2
-        bottom = top + h
-        left = new_tile_w // 2 - w // 2
-        right = left + w
-        tile_cropped = tile_resized[top:bottom, left:right]
+        left = max(0, int((new_tile_w - w ) / 2))
+        top = max(0, int((new_tile_h - h) / 2))
+
+        tile_cropped = tile_resized[top:top+h, left:left+w]
 
         bgr_mean = np.mean(tile_cropped[mask_region>0], axis=0)
         distance = np.sum((part_mean - bgr_mean) ** 2)
@@ -78,10 +77,10 @@ def main(opt):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image_pool", type=str, help="The path of image pool.", default="./image_pool")
+    parser.add_argument("--image_pool", type=str, help="The path of image pool.", default="./test_dataset")
     parser.add_argument("--target_root", type=str, help="The path of target image.", default="./test.jpg")
     parser.add_argument("--output_dir", type=str, help="The path of output image.", default="./output")
-    parser.add_argument("--region_size", type=int, help="Region size of superpixel.", default=60)
+    parser.add_argument("--region_size", type=int, help="Region size of superpixel.", default=100)
     parser.add_argument("--ruler", type=int, help="Region ruler of superpixel.", default=100)
 
     opt = parser.parse_args()
