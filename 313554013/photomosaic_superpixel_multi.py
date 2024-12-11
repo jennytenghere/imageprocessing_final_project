@@ -78,7 +78,6 @@ def main(opt):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--npz_dir", type=str, help="The path where npz files are stored.", default="./img.npz")
     parser.add_argument("--image_pool", type=str, help="The path of image pool.", default="./image_pool")
     parser.add_argument("--target_root", type=str, help="The path of target image.", default="./test.jpg")
     parser.add_argument("--output_dir", type=str, help="The path of output image.", default="./output")
