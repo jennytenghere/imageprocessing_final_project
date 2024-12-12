@@ -5,14 +5,26 @@ import argparse
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-def process_superpixel(idx, target_image, labels, mask, x, y, w, h, image_folder):
+def load_images(opt):
+    f = opt.resize_factor
+    if f < 1: f = 1
+    resize_image_list = []
+    files = sorted(os.listdir(opt.image_pool))  
+    for i in tqdm(files):     
+        image = cv2.imread(os.path.join(opt.image_pool, i))
+        h, w = image.shape[:2]  
+        if h > w:
+            image = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        image = cv2.resize(image, (w // f, h // f), interpolation=cv2.INTER_LINEAR)
+        resize_image_list.append(image)
+    return resize_image_list
+
+def process_superpixel(idx, target_image, labels, mask, x, y, w, h, loaded_images):
     part = target_image[labels == idx]
     part_mean = np.mean(part, axis=0)
     min_distance = 195075
 
-    files = os.listdir(opt.image_pool)
-    for i in files:
-        tile = cv2.imread(os.path.join(image_folder, i))
+    for tile in loaded_images:
 
         tile_h, tile_w = tile.shape[:2]
         scale_factor = max(h / tile_h, w / tile_w)
@@ -38,7 +50,7 @@ def process_superpixel(idx, target_image, labels, mask, x, y, w, h, image_folder
 
     return x, y, final_w, final_h, final_tile
 
-def create_superpixel_list_new(target_image, image_folder, region_size=50, ruler=50):
+def create_superpixel_list_new(target_image, loaded_images, region_size=50, ruler=50):
     slic_image = cv2.ximgproc.createSuperpixelSLIC(target_image, algorithm=cv2.ximgproc.SLIC,
                                             region_size=region_size, ruler=ruler)
     slic_image.iterate(10)
@@ -56,7 +68,7 @@ def create_superpixel_list_new(target_image, image_folder, region_size=50, ruler
             x, y, w, h = cv2.boundingRect(mask)
             if w == 0 or h == 0:
                 continue
-            tasks.append(executor.submit(process_superpixel, idx, target_image, labels, mask, x, y, w, h, image_folder))
+            tasks.append(executor.submit(process_superpixel, idx, target_image, labels, mask, x, y, w, h, loaded_images))
 
         for future in tqdm(as_completed(tasks), total=len(tasks)):
             x, y, w, h, image_tile = future.result()
@@ -67,7 +79,16 @@ def create_superpixel_list_new(target_image, image_folder, region_size=50, ruler
 def main(opt):
     target_image = cv2.imread(opt.target_root)
 
-    output_image = create_superpixel_list_new(target_image, opt.image_pool, region_size=opt.region_size, ruler=opt.ruler)
+    try:
+        loaded_data = np.load(opt.npz_dir)
+    except:
+        resize_image_list = load_images(opt)
+        np.savez(opt.npz_dir, *resize_image_list)
+        loaded_data = np.load(opt.npz_dir)
+
+    loaded_images = [loaded_data[key] for key in loaded_data]
+
+    output_image = create_superpixel_list_new(target_image, loaded_images, region_size=opt.region_size, ruler=opt.ruler)
     
     os.makedirs(opt.output_dir, exist_ok=True)
     cv2.imshow('fig', output_image)
@@ -77,7 +98,9 @@ def main(opt):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image_pool", type=str, help="The path of image pool.", default="./test_dataset")
+    parser.add_argument("--npz_dir", type=str, help="The path where npz files are stored.", default="./img.npz")
+    parser.add_argument("--resize_factor", type=int, help="Resize factor.", default=2)
+    parser.add_argument("--image_pool", type=str, help="The path of image pool.", default="./image_pool")
     parser.add_argument("--target_root", type=str, help="The path of target image.", default="./test.jpg")
     parser.add_argument("--output_dir", type=str, help="The path of output image.", default="./output")
     parser.add_argument("--region_size", type=int, help="Region size of superpixel.", default=100)
