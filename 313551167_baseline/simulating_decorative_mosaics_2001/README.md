@@ -55,7 +55,7 @@ pip install opencv-python-headless numpy scipy tqdm matplotlib
 ### Command-line Execution
 
 ```bash
-python mosaic_generator.py <image> <tiles_dir> [--tile-size TILE_SIZE] [--iterations ITERATIONS] [--edge-weight EDGE_WEIGHT] [--output OUTPUT]
+python photomosaic.py <image> <tiles_dir> [--tile-size TILE_SIZE] [--iterations ITERATIONS] [--edge-weight EDGE_WEIGHT] [--output OUTPUT]
 ```
 
 ### Parameters
