@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import torch
 import argparse
 import numpy as np
@@ -8,78 +6,169 @@ import os
 import torch.nn.functional as F
 import time
 import pywt
+from PIL import Image
 
 def rgb_to_xyz(tensor):
     # Convert RGB to XYZ color space
-    # Normalize RGB values to [0, 1]
     tensor = tensor / 255.0
-    # sRGB to XYZ conversion matrix
     M = torch.tensor([[0.412453, 0.357580, 0.180423],
                       [0.212671, 0.715160, 0.072169],
                       [0.019334, 0.119193, 0.950227]], device=tensor.device)
-    # Reshape tensor for matrix multiplication
     N, H, W, C = tensor.shape
     tensor = tensor.view(N, H * W, C)
     tensor = torch.matmul(tensor, M.T)
     tensor = tensor.view(N, H, W, C)
     return tensor
-
 
 def rgb_to_yiq(tensor):
     # Convert RGB to YIQ color space
-    # Normalize RGB values to [0, 1]
     tensor = tensor / 255.0
-    # RGB to YIQ conversion matrix
-    M = torch.tensor([[0.299, 0.587, 0.114],
+    M = torch.tensor([[0.299,     0.587,     0.114],
                       [0.595716, -0.274453, -0.321263],
-                      [0.211456, -0.522591, 0.311135]], device=tensor.device)
+                      [0.211456, -0.522591,  0.311135]], device=tensor.device)
     N, H, W, C = tensor.shape
     tensor = tensor.view(N, H * W, C)
     tensor = torch.matmul(tensor, M.T)
     tensor = tensor.view(N, H, W, C)
     return tensor
+import torch
 
+def rgb_to_lab(tensor):
+    """
+    Convert a batch of RGB images to the CIELAB (LAB) color space.
+
+    Parameters:
+    - tensor (torch.Tensor): Input tensor of shape (N, H, W, 3) with RGB values in [0, 255].
+
+    Returns:
+    - torch.Tensor: Output tensor of shape (N, H, W, 3) with LAB values.
+    """
+    # Ensure the input tensor is a float tensor
+    tensor = tensor.clone().float()
+
+    # Normalize RGB values to [0, 1]
+    tensor = tensor / 255.0
+
+    # Inverse gamma correction (sRGB to linear RGB)
+    threshold = 0.04045
+    linear_mask = tensor > threshold
+    tensor_linear = torch.zeros_like(tensor)
+    tensor_linear[linear_mask] = ((tensor[linear_mask] + 0.055) / 1.055) ** 2.4
+    tensor_linear[~linear_mask] = tensor[~linear_mask] / 12.92
+
+    # Define the RGB to XYZ conversion matrix (sRGB D65)
+    M = torch.tensor([[0.4124564, 0.3575761, 0.1804375],
+                      [0.2126729, 0.7151522, 0.0721750],
+                      [0.0193339, 0.1191920, 0.9503041]], device=tensor.device)
+
+    # Reshape tensor for matrix multiplication
+    N, H, W, C = tensor_linear.shape
+    tensor_linear = tensor_linear.view(N, H * W, C)
+
+    # Convert linear RGB to XYZ
+    tensor_xyz = torch.matmul(tensor_linear, M.T)
+    tensor_xyz = tensor_xyz.view(N, H, W, C)
+
+    # Define reference white point (D65)
+    white_ref = torch.tensor([0.95047, 1.00000, 1.08883], device=tensor.device).view(1, 1, 1, 3)
+
+    # Normalize XYZ by the white reference
+    tensor_xyz_norm = tensor_xyz / white_ref
+
+    # Define the f(t) function for LAB conversion
+    epsilon = 0.008856  # (6/29)^3
+    kappa = 903.3       # (29/3)^3
+
+    # Apply the f(t) function
+    mask = tensor_xyz_norm > epsilon
+    tensor_f = torch.zeros_like(tensor_xyz_norm)
+    tensor_f[mask] = tensor_xyz_norm[mask] ** (1/3)
+    tensor_f[~mask] = (kappa * tensor_xyz_norm[~mask] + 16) / 116
+
+    # Compute L*, a*, b*
+    L = 116 * tensor_f[..., 1] - 16
+    a = 500 * (tensor_f[..., 0] - tensor_f[..., 1])
+    b = 200 * (tensor_f[..., 1] - tensor_f[..., 2])
+
+    # Stack the LAB channels
+    lab = torch.stack([L, a, b], dim=-1)
+
+    return lab
+
+def rgb_to_hsv(tensor):
+    # Convert RGB to HSV color space (OpenCV-like)
+    # RGB values are in [0,255]
+    # The output HSV should have:
+    # H in [0,179], S in [0,255], V in [0,255]
+    tensor = tensor.clone()  # Avoid altering original
+    tensor = tensor.float()
+    # Normalize to [0,1]
+    r = tensor[...,0] / 255.0
+    g = tensor[...,1] / 255.0
+    b = tensor[...,2] / 255.0
+
+    max_val, _ = torch.max(torch.stack((r,g,b), dim=-1), dim=-1)
+    min_val, _ = torch.min(torch.stack((r,g,b), dim=-1), dim=-1)
+    diff = max_val - min_val
+
+    # Hue calculation
+    # Avoid division by zero by adding a small epsilon where needed
+    epsilon = 1e-6
+    hue = torch.zeros_like(max_val)
+    mask = (diff > epsilon)
+    # For pixels where diff > 0:
+    # hue calculation as per standard formula:
+    # For reference:
+    # H = 60 * ( (G - B)/diff mod 6 ) if max_val == R
+    # H = 60 * ( (B - R)/diff + 2 ) if max_val == G
+    # H = 60 * ( (R - G)/diff + 4 ) if max_val == B
+    # Then H normalized to [0,360), we then scale to [0,179]
+    r_eq = (max_val == r)
+    g_eq = (max_val == g)
+    b_eq = (max_val == b)
+
+    hue[r_eq & mask] = (60.0 * ((g[r_eq & mask] - b[r_eq & mask]) / (diff[r_eq & mask] + epsilon)) ) % 360
+    hue[g_eq & mask] = (60.0 * ((b[g_eq & mask] - r[g_eq & mask]) / (diff[g_eq & mask] + epsilon)) + 120) % 360
+    hue[b_eq & mask] = (60.0 * ((r[b_eq & mask] - g[b_eq & mask]) / (diff[b_eq & mask] + epsilon)) + 240) % 360
+
+    # Scale hue to [0,179]
+    hue = hue * (179.0/360.0)
+
+    # Saturation
+    sat = torch.zeros_like(max_val)
+    sat[mask] = (diff[mask] / (max_val[mask] + epsilon)) * 255.0
+
+    # Value
+    val = max_val * 255.0
+
+    hsv = torch.stack([hue, sat, val], dim=-1)
+    return hsv
 
 def apply_transform(tensor, transform):
     if transform is None or transform.lower() == 'none':
         return tensor
     elif transform.lower() == 'fourier':
-        # Apply Fourier transform
-        # Permute tensor to (N, C, H, W) for torch.fft.fft2
         tensor = tensor.permute(0, 3, 1, 2)  # (N, C, H, W)
-        # Apply 2D Fourier transform along H and W dimensions
         tensor_fft = torch.fft.fft2(tensor)
-        # Take the magnitude (absolute value) to get real numbers
         tensor_abs = torch.abs(tensor_fft)
-        # Permute back to (N, H, W, C)
         tensor_transformed = tensor_abs.permute(0, 2, 3, 1)  # (N, H, W, C)
         return tensor_transformed
     elif transform.lower() == 'wavelet':
-        # Apply Wavelet transform using Haar wavelet
         N, H, W, C = tensor.shape
         transformed_tensors = []
         for c in range(C):
-            # Extract each channel and move to CPU for processing with pywt
             channel = tensor[:, :, :, c].cpu().numpy()  # Shape: (N, H, W)
-            # Initialize list to hold transformed channels for this feature map
             transformed_channels = []
             for i in range(N):
-                # Perform 2D Discrete Wavelet Transform
                 coeffs2 = pywt.dwt2(channel[i], 'haar')
                 LL, (LH, HL, HH) = coeffs2
-                # Flatten the LL coefficients and store
                 transformed_channels.append(LL.flatten())
-            # Stack all transformed channels for this feature map
             transformed_channel_tensor = torch.tensor(transformed_channels, device=tensor.device)
             transformed_tensors.append(transformed_channel_tensor)
-        # Concatenate all channels
-        tensor_transformed = torch.stack(transformed_tensors, dim=1)  # Shape: (N, C, LL_H*LL_W)
-        # Optionally, reshape back to (N, H', W', C) if needed
-        # Here, we keep it as (N, C, LL_H*LL_W) since clustering requires 1D features
+        tensor_transformed = torch.stack(transformed_tensors, dim=1)  # (N, C, LL_H*LL_W)
         return tensor_transformed
     else:
         raise NotImplementedError(f"Transform '{transform}' is not implemented.")
-
 
 def compress_tensor(tensor, compress_ratio):
     if compress_ratio <= 1:
@@ -92,7 +181,6 @@ def compress_tensor(tensor, compress_ratio):
         tensor = F.interpolate(tensor, size=(new_H, new_W), mode='area')
         tensor = tensor.permute(0, 2, 3, 1)  # (N, new_H, new_W, C)
         return tensor
-
 
 def preprocess_tensor(tensor, color_space, transform, compress_ratio, batch_size):
     N = tensor.shape[0]
@@ -109,6 +197,10 @@ def preprocess_tensor(tensor, color_space, transform, compress_ratio, batch_size
             tensor_batch_cs = rgb_to_xyz(tensor_batch)
         elif color_space.lower() == 'yiq':
             tensor_batch_cs = rgb_to_yiq(tensor_batch)
+        elif color_space.lower() == 'hsv':
+            tensor_batch_cs = rgb_to_hsv(tensor_batch)
+        elif color_space.lower() == 'lab':
+            tensor_batch_cs = rgb_to_lab(tensor_batch)
         else:
             raise ValueError(f"Unknown color space: {color_space}")
         # Apply transformation
@@ -118,7 +210,6 @@ def preprocess_tensor(tensor, color_space, transform, compress_ratio, batch_size
         processed_tensors.append(tensor_batch_compressed)
     processed_tensor = torch.cat(processed_tensors, dim=0)
     return processed_tensor
-
 
 def main():
     parser = argparse.ArgumentParser(description='Photomosaic Result Map')
@@ -162,7 +253,6 @@ def main():
     # Start timing
     total_start_time = time.time()
 
-
     # Load tensors
     A = torch.load(args.tgt_pt).float()
     B = torch.load(args.used_pt).float()
@@ -204,7 +294,7 @@ def main():
     B_evaluate = preprocess_tensor(B, args.evaluate_Cspace, args.evaluate_transform, args.evaluate_compress_ratio,
                                    args.pre_batch)
 
-    # Detach unnecessary tensors
+    # Detach original A and B
     A.detach()
     B.detach()
     torch.cuda.empty_cache()
@@ -243,12 +333,48 @@ def main():
         A_batch_expanded = A_batch.unsqueeze(1)
         B_query_expanded = B_query.unsqueeze(0)
 
-        diff = A_batch_expanded - B_query_expanded
+        # Compute difference
+        # If HSV, we must use the special formula
+        if args.query_Cspace.lower() == 'hsv':
+            # Extract channels
+            A_h = A_batch_expanded[...,0]
+            A_s = A_batch_expanded[...,1]
+            A_v = A_batch_expanded[...,2]
 
-        if args.query_is_fitness:
-            distances = torch.abs(diff).sum(dim=(2, 3, 4))
+            B_h = B_query_expanded[...,0]
+            B_s = B_query_expanded[...,1]
+            B_v = B_query_expanded[...,2]
+
+            # Hue difference with circular adjustment
+            diff_h = torch.abs(A_h - B_h)
+            max_hue = 180.0
+            half_hue = max_hue / 2.0
+            mask = diff_h > half_hue
+            diff_h[mask] = max_hue - diff_h[mask]
+
+            # Saturation and Value differences
+            diff_s = A_s - B_s
+            diff_v = A_v - B_v
+
+            # Compute per-pixel distance in HSV
+            # weights (1,1,1) are already default
+            # Distances per pixel: sqrt(diff_h^2 + diff_s^2 + diff_v^2)
+            # Then sum over (H, W, C)
+            pixel_dist = torch.sqrt(diff_h**2 + diff_s**2 + diff_v**2)
+            # If query_is_fitness: sum of absolute differences is requested
+            # But we have a Euclidean-like metric here.
+            # The user request: "If query method is hsv, fix the distance calculating to the above"
+            # The above definition uses Euclidean distance.
+            # We'll ignore query_is_fitness in HSV mode as per instructions ("fix the distance ... always weight 1,1,1").
+            distances = pixel_dist.sum(dim=(2,3))
+
         else:
-            distances = (diff ** 2).sum(dim=(2, 3, 4))
+            # Original functionality for other color spaces
+            diff = A_batch_expanded - B_query_expanded
+            if args.query_is_fitness:
+                distances = torch.abs(diff).sum(dim=(2, 3, 4))
+            else:
+                distances = (diff ** 2).sum(dim=(2, 3, 4))
 
         best_indices = distances.argmin(dim=1)
         best_match_indices_list.append(best_indices)
@@ -258,7 +384,6 @@ def main():
     querying_end_time = time.time()
     querying_time = querying_end_time - querying_start_time
     print(f'Querying completed in {querying_time:.2f} seconds.')
-
 
     # Evaluating stage
     evaluating_start_time = time.time()
@@ -316,8 +441,6 @@ def main():
     best_match_indices_reshaped = best_match_indices.reshape(N_A_query, n_row, n_col)
     loss_tensor_reshaped = loss_tensor.reshape(N_A_query, n_row, n_col)
 
-
-
     output_log_path = os.path.join(args.output_dir, 'output.log')
     with open(output_log_path, 'w') as log_file:
         # Write all parameters
@@ -365,6 +488,8 @@ def main():
 
     # Plotting
     for i in range(N_A_query):
+        # im = Image.fromarray(Founded_images[i]).resize((4000,2250))
+        # im.save("your_file.jpeg")
         fig, axs = plt.subplots(1, 3, figsize=(15, 5))
         axs[0].imshow(A[i])
         axs[0].set_title('Original Image')
@@ -375,14 +500,11 @@ def main():
         axs[1].axis('off')
 
         loss_image = loss_tensor_reshaped[i]/(h_evaluate* w_evaluate* C_B_evaluate)
-        # Upscale the loss image to match image size
         loss_image_upscaled = np.kron(loss_image, np.ones((h, w)))
-        # Use a colorful colormap and store the image object
         im = axs[2].imshow(loss_image_upscaled, cmap='viridis')
         axs[2].set_title('Loss Map')
         axs[2].axis('off')
 
-        # Add a colorbar to the loss map with original loss values
         cbar = fig.colorbar(im, ax=axs[2], orientation='vertical', fraction=0.046, pad=0.04)
         cbar.set_label('Loss Value')
 
@@ -396,7 +518,6 @@ def main():
 
     total_end_time = time.time()
     print(f'Total time: {total_end_time - total_start_time:.2f} seconds.')
-
 
 if __name__ == '__main__':
     main()
