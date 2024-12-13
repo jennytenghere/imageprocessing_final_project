@@ -3,14 +3,19 @@ import os
 import time
 from PIL import Image, ImageOps
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import cpu_count
+import numpy as np
 
 # Configuration parameters
 ENLARGEMENT = 1     # the mosaic image will be this many times wider and taller than the original
-OUT_FILE = 'mosaic.jpeg'
+MAX_WORKERS = cpu_count()  
 
 class TileProcessor:
-    def __init__(self, tiles_directory):
+    def __init__(self, tiles_directory=None, use_cifar10=False, cifar10_path=None):
         self.tiles_directory = tiles_directory
+        self.use_cifar10 = use_cifar10
+        self.cifar10_path = cifar10_path
 
     def __process_tile(self, tile_path):
         try:
@@ -31,18 +36,60 @@ class TileProcessor:
         except:
             return None
 
+    def process_cifar10_data(self):
+        print(f"Loading CIFAR-10 tiles from {self.cifar10_path}")
+        tiles = []
+        
+        try:
+            data = np.load(self.cifar10_path)
+            images = data['data']
+            
+            if len(images.shape) == 2:
+                images = images.reshape(-1, 3, 32, 32)
+                images = images.transpose(0, 2, 3, 1)
+            
+            with tqdm(total=len(images), desc="Processing CIFAR-10 tiles") as pbar:
+                for img_array in images:
+                    img = Image.fromarray(img_array)
+                    img = img.resize((tile_size, tile_size), Image.LANCZOS)
+                    tiles.append(img)
+                    pbar.update(1)
+            
+            print(f'Processed {len(tiles)} CIFAR-10 tiles')
+            return tiles
+            
+        except Exception as e:
+            print(f"Error loading CIFAR-10 data: {e}")
+            return []
+
     def get_tiles(self):
+        if self.use_cifar10 and self.cifar10_path:
+            return self.process_cifar10_data()
+            
         tiles = []
         print('Reading tiles from {}...'.format(self.tiles_directory))
 
-        # Get total number of files for progress bar
-        total_files = sum([len(files) for r, d, files in os.walk(self.tiles_directory)])
-        
-        with tqdm(total=total_files, desc="Processing tiles") as pbar:
-            for root, subFolders, files in os.walk(self.tiles_directory):
-                for tile_name in files:
-                    tile_path = os.path.join(root, tile_name)
-                    tile = self.__process_tile(tile_path)
+        # Get all tile paths
+        tile_paths = []
+        for root, _, files in os.walk(self.tiles_directory):
+            for tile_name in files:
+                if tile_name.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                    tile_paths.append(os.path.join(root, tile_name))
+
+        if not tile_paths:
+            print("No valid image files found in the tiles directory")
+            return []
+
+        # Process tiles using thread pool
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Submit all tasks and create future-to-path mapping
+            future_to_path = {executor.submit(self.__process_tile, path): path 
+                            for path in tile_paths}
+            
+            # Process completed tasks with progress bar
+            with tqdm(total=len(tile_paths), desc="Processing tiles") as pbar:
+                for future in as_completed(future_to_path):
+                    tile = future.result()
                     if tile:
                         tiles.append(tile)
                     pbar.update(1)
@@ -69,19 +116,23 @@ class TargetImage:
 
         return large_img.convert('RGB')
 
-def calculate_l1_distance(block_data, tile_data):
-    distance = 0
-    for i in range(len(block_data)):
-        # Get RGB values from tuples
-        r1, g1, b1 = block_data[i]
-        r2, g2, b2 = tile_data[i]
-        # Calculate L1 distance for RGB values
-        distance += abs(r1 - r2) + abs(g1 - g2) + abs(b1 - b2)
-    return distance
+def find_best_match(args):
+    block_data, tile_data_list = args
+    best_distance = float('inf')
+    best_tile_idx = 0
+
+    for idx, curr_tile_data in enumerate(tile_data_list):
+        distance = sum(abs(a - b) for p1, p2 in zip(block_data, curr_tile_data)
+                      for a, b in zip(p1, p2))
+        if distance < best_distance:
+            best_distance = distance
+            best_tile_idx = idx
+
+    return best_tile_idx, best_distance
 
 def create_mosaic(original_img, tiles):
     """
-    Create mosaic following the paper's O(WHTwh) implementation
+    Create mosaic with multithreading support
     """
     print('Building mosaic...')
     
@@ -93,57 +144,61 @@ def create_mosaic(original_img, tiles):
     
     W = original_img.size[0]
     H = original_img.size[1]
-    total_blocks = (W // tile_size) * (H // tile_size)
     
-    # Initialize total loss
+    # Prepare blocks data
+    blocks_data = []
+    positions = []
+    
+    for y in range(0, H - tile_size + 1, tile_size):
+        for x in range(0, W - tile_size + 1, tile_size):
+            block = original_img.crop((x, y, x + tile_size, y + tile_size))
+            blocks_data.append((list(block.getdata()), tile_data))
+            positions.append((x, y))
+
+    total_blocks = len(blocks_data)
     total_loss = 0
     total_pixels = 0
-    
-    # Setup progress bar for blocks processing
-    with tqdm(total=total_blocks, desc="Creating mosaic") as pbar:
-        # Iterate through each block in the original image O(WH)
-        for y in range(0, H - tile_size + 1, tile_size):
-            for x in range(0, W - tile_size + 1, tile_size):
-                # Get current block data
-                block = original_img.crop((x, y, x + tile_size, y + tile_size))
-                block_data = list(block.getdata())
-                
-                # Find best matching tile O(T)
-                best_distance = float('inf')
-                best_tile_idx = 0
-                
-                # Compare with each tile O(T * w * h)
-                for idx, curr_tile_data in enumerate(tile_data):
-                    distance = calculate_l1_distance(block_data, curr_tile_data)
-                    if distance < best_distance:
-                        best_distance = distance
-                        best_tile_idx = idx
+
+    # Process blocks using thread pool
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_block = {executor.submit(find_best_match, block_data): idx 
+                          for idx, block_data in enumerate(blocks_data)}
+        
+        # Process completed tasks with progress bar
+        with tqdm(total=total_blocks, desc="Creating mosaic") as pbar:
+            for future in as_completed(future_to_block):
+                block_idx = future_to_block[future]
+                best_tile_idx, distance = future.result()
                 
                 # Place the best matching tile
+                x, y = positions[block_idx]
                 result.paste(tiles[best_tile_idx], (x, y))
-                pbar.update(1)
                 
-                # Update total loss
-                total_loss += best_distance
-                total_pixels += len(block_data)*3
-    
+                # Update metrics
+                total_loss += distance
+                total_pixels += tile_size * tile_size * 3
+                
+                pbar.update(1)
+
     # Save the result
-    print('Saving mosaic...')
-    result.save(OUT_FILE)
-    print('Finished! Output is in', OUT_FILE)
+    print('Finished creating mosaic!')
     
-    # Caclulate average loss
+    # Calculate average loss
     min_loss_per_pixel = total_loss / total_pixels
     print(f'\nMetrics:')
     print(f'- Total L1 Loss: {total_loss:,}')
     print(f'- Total Pixels (RGB channels): {total_pixels:,}')
     print(f'- Min Loss Per Pixel: {min_loss_per_pixel:.2f}')
     
+    return result
 
 def show_error(msg):
     print('ERROR: {}'.format(msg))
 
-def create_photomosaic(img_path, tiles_path):
+def create_photomosaic(img_path, output_path='mosaic.jpeg', tiles_path=None, use_cifar10=False, cifar10_path=None):
+    """
+    Create a photomosaic from an input image using either a directory of tiles or CIFAR-10 dataset
+    """
     # Start timing
     start_time = time.time()
     
@@ -152,11 +207,16 @@ def create_photomosaic(img_path, tiles_path):
     image_data = TargetImage(img_path).get_data()
     
     print("\nStep 2: Processing tile images")
-    tiles_data = TileProcessor(tiles_path).get_tiles()
+    tiles_data = TileProcessor(tiles_path, use_cifar10, cifar10_path).get_tiles()
     
     if tiles_data:
         print("\nStep 3: Creating mosaic")
-        create_mosaic(image_data, tiles_data)
+        result = create_mosaic(image_data, tiles_data)
+        
+        # Save the result
+        print(f'Saving mosaic to {output_path}...')
+        result.save(output_path)
+        print(f'Saved mosaic to {output_path}')
         
         # Calculate and display total execution time
         end_time = time.time()
@@ -172,19 +232,38 @@ def create_photomosaic(img_path, tiles_path):
         print(f'- Number of tiles used: {len(tiles_data)}')
         print(f'- Total tiles placed: {(image_data.size[0] // tile_size) * (image_data.size[1] // tile_size)}')
     else:
-        show_error("No images found in tiles directory '{}'".format(tiles_path))
+        show_error("No valid tiles found")
 
 if __name__ == '__main__':
     if len(sys.argv) < 4:
-        show_error('Usage: {} <image> <tiles directory> <tile size>\r'.format(sys.argv[0]))
+        show_error('''Usage: 
+        For tile directory: {} <image> <tiles directory> <tile size> [output path]
+        For CIFAR-10: {} <image> --cifar10 <cifar10_path> <tile size> [output path]
+        '''.format(sys.argv[0], sys.argv[0]))
     else:
         source_image = sys.argv[1]
-        tile_dir = sys.argv[2]
-        tile_size = int(sys.argv[3])
+        output_path = 'mosaic.jpeg' 
         
-        if not os.path.isfile(source_image):
-            show_error("Unable to find image file '{}'".format(source_image))
-        elif not os.path.isdir(tile_dir):
-            show_error("Unable to find tile directory '{}'".format(tile_dir))
+        if sys.argv[2] == '--cifar10':
+            use_cifar10 = True
+            cifar10_path = sys.argv[3]
+            tile_size = int(sys.argv[4])
+            if len(sys.argv) > 5:
+                output_path = sys.argv[5]
+                
+            if not os.path.isfile(cifar10_path):
+                show_error(f"Unable to find CIFAR-10 file '{cifar10_path}'")
+            else:
+                create_photomosaic(source_image, output_path, use_cifar10=True, cifar10_path=cifar10_path)
         else:
-            create_photomosaic(source_image, tile_dir)
+            tile_dir = sys.argv[2]
+            tile_size = int(sys.argv[3])
+            if len(sys.argv) > 4:
+                output_path = sys.argv[4]
+                
+            if not os.path.isfile(source_image):
+                show_error(f"Unable to find image file '{source_image}'")
+            elif not os.path.isdir(tile_dir):
+                show_error(f"Unable to find tile directory '{tile_dir}'")
+            else:
+                create_photomosaic(source_image, output_path, tiles_path=tile_dir)

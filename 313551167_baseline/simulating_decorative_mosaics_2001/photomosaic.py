@@ -21,6 +21,29 @@ class ImageSetMosaic:
         self.tile_colors = []
         self.n_processes = max(1, mp.cpu_count() - 1)
         
+    def load_cifar10_tiles(self, npz_path):
+        """Load tiles from CIFAR-10 dataset"""
+        print(f"Loading CIFAR-10 tiles from {npz_path}")
+        
+        data = np.load(npz_path)
+        images = data['data']
+        
+        if len(images.shape) == 2:
+            images = images.reshape(-1, 3, 32, 32)
+            # Convert to (N, 32, 32, 3) format
+            images = images.transpose(0, 2, 3, 1)
+        
+        for img in tqdm(images):
+            img = cv2.resize(img, (self.tile_size, self.tile_size))
+            
+            avg_color = np.mean(img, axis=(0,1))
+            
+            self.tiles.append(ImageTile(img, avg_color))
+            self.tile_colors.append(avg_color)
+        
+        self.tile_colors = np.array(self.tile_colors)
+        print(f"Loaded {len(self.tiles)} tiles from CIFAR-10")
+                  
     def load_tiles(self, tiles_dir):
         """Load and process tile images"""
         print(f"Loading tiles from {tiles_dir}")
@@ -251,7 +274,9 @@ class ImageSetMosaic:
         
         return result
 
-def create_image_mosaic(image_path, tiles_dir, output_path, tile_size=50, num_iterations=20, edge_weight=1.0):
+def create_image_mosaic(image_path, tiles_dir=None, output_path='mosaic.png', 
+                       tile_size=50, num_iterations=20, edge_weight=1.0, 
+                       use_cifar10=False, cifar10_path=None):
     """Helper function to create image mosaic"""
     # Load image
     image = cv2.imread(image_path)
@@ -263,7 +288,12 @@ def create_image_mosaic(image_path, tiles_dir, output_path, tile_size=50, num_it
     start_time = time.time()
     
     mosaic = ImageSetMosaic(tile_size=tile_size, num_iterations=num_iterations)
-    mosaic.load_tiles(tiles_dir)
+    
+    if use_cifar10 and cifar10_path:
+        mosaic.load_cifar10_tiles(cifar10_path)
+    elif tiles_dir:
+        mosaic.load_tiles(tiles_dir)
+    # mosaic.load_tiles(tiles_dir)
     result = mosaic.create_mosaic(image, edge_weight=edge_weight)
     
     elapsed_time = time.time() - start_time
@@ -278,7 +308,10 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Create image mosaic')
     parser.add_argument('image', help='Input image path')
-    parser.add_argument('tiles_dir', help='Directory containing tile images')
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--tiles-dir', help='Directory containing tile images')
+    group.add_argument('--use-cifar10', action='store_true', help='Use CIFAR-10 dataset as tiles')
+    parser.add_argument('--cifar10-path', help='Path to cifar10_train.npz file')
     parser.add_argument('--tile-size', type=int, default=50, help='Size of mosaic tiles')
     parser.add_argument('--iterations', type=int, default=20, help='Number of iterations')
     parser.add_argument('--edge-weight', type=float, default=1.0, help='Edge influence weight')
@@ -286,14 +319,19 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
+    if args.use_cifar10 and not args.cifar10_path:
+        parser.error("--cifar10-path is required when using --use-cifar10")
+    
     try:
         create_image_mosaic(
             args.image,
-            args.tiles_dir,
-            args.output,
+            tiles_dir=args.tiles_dir,
+            output_path=args.output,
             tile_size=args.tile_size,
             num_iterations=args.iterations,
-            edge_weight=args.edge_weight
+            edge_weight=args.edge_weight,
+            use_cifar10=args.use_cifar10,
+            cifar10_path=args.cifar10_path
         )
     except Exception as e:
         print(f"Error: {e}")
