@@ -51,35 +51,52 @@ pip install opencv-python-headless numpy scipy tqdm matplotlib
 ```
 
 ## Usage
-
-### Command-line Execution
-
 ```bash
-python photomosaic.py <image> <tiles_dir> [--tile-size TILE_SIZE] [--iterations ITERATIONS] [--edge-weight EDGE_WEIGHT] [--output OUTPUT]
+usage: photomosaic.py [-h] (--tiles-dir TILES_DIR | --use-cifar10) [--cifar10-path CIFAR10_PATH] [--tile-size TILE_SIZE] [--iterations ITERATIONS]
+                      [--edge-weight EDGE_WEIGHT] [--output OUTPUT]
+                      image
+
+Create image mosaic
+
+positional arguments:
+  image                 Input image path
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --tiles-dir TILES_DIR
+                        Directory containing tile images
+  --use-cifar10         Use CIFAR-10 dataset as tiles
+  --cifar10-path CIFAR10_PATH
+                        Path to cifar10_train.npz file
+  --tile-size TILE_SIZE
+                        Size of mosaic tiles
+  --iterations ITERATIONS
+                        Number of iterations
+  --edge-weight EDGE_WEIGHT
+                        Edge influence weight
+  --output OUTPUT       Output image path
 ```
 
-### Parameters
-
-- `<image>`: Path to the input image.
-- `<tiles_dir>`: Directory containing tile images.
-- `--tile-size`: Size of each tile (default: 50 pixels).
-- `--iterations`: Number of iterations for region refinement (default: 20).
-- `--edge-weight`: Influence of edge alignment on tile placement (default: 1.0).
-- `--output`: Path to save the output mosaic (default: `mosaic.png`).
-
 ### Example
-Use the [Oxford 102 Flower](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/) as the tile directory
-
+#### Use the [Oxford 102 Flower](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/) as the tile directory
 ```bash
-python photomosaic.py input.jpg 102flowers/ --tile-size 20 --iterations 20 --edge-weight 1.0 --output mosaic.png
+python photomosaic.py ../data/minion.jpg --tiles-dir ../data/102flowers --tile-size 20 --output mosaic_102flowers.png
+```
+#### Use the CIFAR10 dataset
+```bash
+python photomosaic.py ../data/minion.jpg --use-cifar10 --cifar10-path ../data/cifar10_train.npz --tile-size 16 --output mosaic_cifar10_16.png
 ```
 
 ### Output
-- **Original Image**
-![alt text](./1.jpg)
+#### **Original Image**
+  
+![alt text](../data/minion.jpg)
 
-- **Photomosaic Image**
-![mosaic](./mosaic.png)
+#### **Photomosaic Image with CIFAR10**
+![mosaic](./mosaic_cifar10_16.png)
+
+#### **Photomosaic Image with Oxfords 102 flowers**
+![102flowers](./mosaic_102flowers.png)
 
 ## Performance and Complexity
 

@@ -15,6 +15,11 @@ where:
 - `Tr(i,j), Tg(i,j), Tb(i,j)` are the RGB values of the tile image
 - The total distance is summed over all pixels in the block
 
+### Steps
+1. Load the tile dataset .
+2. For each blocks in the original image, seek the minimal L1 distance over all tiles in the dataset.
+3. Use the tile to replace the block in the original image.
+
 
 ## Requirements
 
@@ -25,25 +30,20 @@ pip install Pillow tqdm
 ```
 
 ## Usage
-
+### Using the image directory
 ```bash
-python photomosaicTran.py <original_image> <tiles_directory> <tile size>
+python photomosaicTran.py <original_image> <tiles_directory> <tile size> <output_file>
+```
+### Using CIFAR-10 dataset
+Please ensure you have the `cifar10_train.npz` in the correct path.
+``` bash
+python photomosaicTran.py <original_image> --cifar10 cifar10_train.npz 32 <output_file>
+```
+### Example
+``` bash
+python photomosaicTran.py ../data/minion.jpg --cifar10 ../data/cifar10_train.npz 32 mosaic_cifar.jpg
 ```
 
-### Parameters
-
-- `original_image`: Path to the image you want to convert into a mosaic
-- `tiles_directory`: Directory containing the tile images
-- `tile size` : Size of each mosaic tile in pixels
-
-### Configuration
-
-You can modify these parameters in the code:
-- `ENLARGEMENT`: Output image size multiplier (default: 8)
-
-## Output
-
-The program will generate a file named `mosaic.jpeg` in the current directory.
 
 ## Metrics
 
@@ -98,4 +98,6 @@ The actual runtime is reported in both seconds and minutes, allowing for:
 
 
 ## Acknowledgments
-Based on the algorithm described in ["Generating photomosaics: an empirical study" (A. Finkelstein, M. Range)](https://dl.acm.org/doi/pdf/10.1145/298151.298213)
+Based on the algorithm described in ["Generating photomosaics: an empirical study" (A. Finkelstein, M. Range)](https://dl.acm.org/doi/pdf/10.1145/298151.298213).
+
+Modified the code based on https://github.com/codebox/mosaic
